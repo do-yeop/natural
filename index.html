@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>지형 탐험 부스</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; min-height: 100%;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: linear-gradient(160deg, #bfe9f5 0%, #e9f7e0 55%, #f6efd8 100%);
+    -webkit-user-select: none; user-select: none;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 28px 18px 40px;
+  }
+  h1 { font-size: 36px; color: #3a5a3a; margin-top: 14px; text-align: center; }
+  .sub { font-size: 18px; color: #6b7a5e; margin: 8px 0 26px; text-align: center; }
+  .cards { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 18px; }
+  .card {
+    display: flex; align-items: center; gap: 18px;
+    border: none; border-radius: 22px; padding: 22px 24px;
+    color: #fff; text-decoration: none; cursor: pointer;
+    box-shadow: 0 6px 0 rgba(0,0,0,0.18), 0 8px 20px rgba(0,0,0,0.15);
+    transition: transform .06s;
+  }
+  .card:active { transform: translateY(4px); box-shadow: 0 2px 0 rgba(0,0,0,0.18); }
+  .card .ico { font-size: 52px; line-height: 1; }
+  .card .txt { text-align: left; }
+  .card .title { font-size: 26px; font-weight: 900; }
+  .card .desc { font-size: 15px; opacity: 0.95; margin-top: 3px; }
+  .mountain { background: linear-gradient(135deg, #8a6a3c, #6b4f28); }
+  .sea { background: linear-gradient(135deg, #2a9fd6, #0e6ba8); }
+  .plain { background: linear-gradient(135deg, #8bbf57, #5d9a3a); }
+  .soon { filter: grayscale(0.5) brightness(0.92); cursor: default; }
+  .soon .badge {
+    margin-left: auto; background: rgba(255,255,255,0.9); color: #555;
+    font-size: 13px; font-weight: 800; padding: 5px 10px; border-radius: 999px;
+  }
+  .foot { margin-top: 28px; font-size: 14px; color: #7a8a6e; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>🗺️ 지형 탐험 부스</h1>
+  <div class="sub">놀고 싶은 지형을 골라보세요!</div>
+
+  <div class="cards">
+    <a class="card mountain" href="contour-stack-game.html">
+      <div class="ico">⛰️</div>
+      <div class="txt">
+        <div class="title">산지 — 등고선 쌓기</div>
+        <div class="desc">블럭을 높이 쌓아 등고선을 만들어요</div>
+      </div>
+    </a>
+
+    <a class="card sea" href="sea-game.html">
+      <div class="ico">🌊</div>
+      <div class="txt">
+        <div class="title">해안 — 바다 수영</div>
+        <div class="desc">장애물을 피하며 멀리 헤엄쳐요</div>
+      </div>
+    </a>
+
+    <div class="card plain soon">
+      <div class="ico">🌾</div>
+      <div class="txt">
+        <div class="title">평지 — 준비중</div>
+        <div class="desc">곧 만나요!</div>
+      </div>
+      <div class="badge">준비중</div>
+    </div>
+  </div>
+
+  <div class="foot">5학년 사회 · 지형 학습 게임</div>
+</body>
+</html>

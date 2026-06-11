@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>바다 수영 - 해안 부스</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: #1b6ea8; user-select: none; -webkit-user-select: none; touch-action: none;
+  }
+  #game { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+  #hud {
+    position: fixed; top: 0; left: 0; width: 100%;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 12px 14px; pointer-events: none; z-index: 5;
+  }
+  .panel {
+    background: rgba(255,255,255,0.85); border-radius: 14px; padding: 6px 14px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.25); text-align: center;
+  }
+  .label { font-size: 13px; color: #1b5e7a; font-weight: 700; }
+  .value { font-size: 26px; color: #0d3b50; font-weight: 900; line-height: 1.1; }
+  .value small { font-size: 14px; }
+
+  .overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    background: rgba(10, 40, 60, 0.6); color: #fff; text-align: center; padding: 22px;
+  }
+  .overlay.hidden { display: none; }
+  .card {
+    background: rgba(255,255,255,0.96); color: #123; border-radius: 24px;
+    padding: 28px 30px; max-width: 440px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .card h1 { font-size: 32px; margin-bottom: 6px; color: #0e6ba8; }
+  .card .emoji { font-size: 48px; margin-bottom: 6px; }
+  .card p { font-size: 18px; line-height: 1.55; margin-bottom: 10px; color: #2a4a58; }
+  .card .big { font-size: 44px; font-weight: 900; color: #0e9bd8; margin: 6px 0; }
+  .btn {
+    display: inline-block; margin-top: 14px; background: #0e9bd8; color: #fff; border: none;
+    font-size: 23px; font-weight: 800; padding: 15px 44px; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 5px 0 #0a76a5; transition: transform .05s;
+  }
+  .btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #0a76a5; }
+  .hint { margin-top: 12px; font-size: 15px; color: #5b7a86; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="panel">
+    <div class="label">수영한 거리</div>
+    <div class="value"><span id="curDist">0</span><small> m</small></div>
+  </div>
+  <div class="panel">
+    <div class="label">🏆 최고 기록</div>
+    <div class="value"><span id="bestDist">0</span><small> m</small></div>
+  </div>
+</div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <div class="emoji">🏊</div>
+    <h1>바다 수영</h1>
+    <p><b>좌우로 스와이프</b>해서<br>옆 레인으로 이동해요!</p>
+    <p>🦈 상어, 🐟 물고기, 🪼 해파리를 <b>피하고,</b><br>⚡ <b>부스터</b>를 먹으면 🚤 보트로 무적 질주!</p>
+    <p style="font-size:16px;color:#0e6ba8;">코스 양옆 <b>해안 지형</b>(갯벌·모래사장·등대 등)<br>이름표도 함께 익혀봐요! 🗺️</p>
+    <button class="btn" id="startBtn">시작하기</button>
+    <div class="hint">화면 좌/우를 탭하거나 ← → 키도 돼요.</div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="overScreen">
+  <div class="card">
+    <div class="emoji">🌊</div>
+    <h1>풍덩!</h1>
+    <p>이번에 수영한 거리</p>
+    <div class="big"><span id="finalDist">0</span> m</div>
+    <p id="recordMsg"></p>
+    <button class="btn" id="retryBtn">다시 하기</button>
+    <div class="hint">친구와 누가 더 멀리 헤엄치는지 겨뤄봐요!</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  var W = 0, H = 0;
+
+  var LANES = 3;
+  var C = 1.15;
+  var ZFAR = 9;
+  var COLL_Z = 0.36;
+  var BOOST_MAX = 360;       // 부스터 지속(프레임)
+  var HZ = 0, YN = 0, trackHalf = 0, laneSpacingNear = 0, SWY = 0;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    HZ = H * 0.40; YN = H * 1.02;
+    trackHalf = Math.min(W * 0.48, 360);   // 코스 폭(넓게)
+    laneSpacingNear = (trackHalf * 2) / 3;
+    SWY = H * 0.80;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function laneOffset(lane) { return (lane - (LANES - 1) / 2) * laneSpacingNear; }
+  function project(offset, z) {
+    var f = 1 / (1 + C * z);
+    return { x: W / 2 + offset * f, y: HZ + (YN - HZ) * f, s: f };
+  }
+
+  var state = "start";
+  var swimmer = { lane: 1, offset: 0 };
+  var obstacles = [], items = [], particles = [], clouds = [], caps = [], gulls = [], landmarks = [];
+  var sail = { x: 0.3, y: 0, v: 0.00018 };
+  var landmarkTimer = 0, lmIndex = 0;
+  var LM_TYPES = [
+    { kind: "lighthouse", label: "등대" },
+    { kind: "breakwater", label: "방파제" },
+    { kind: "rocks", label: "갯바위" },
+    { kind: "beach", label: "모래사장" },
+    { kind: "mudflat", label: "갯벌" },
+    { kind: "harbor", label: "항구" },
+    { kind: "cape", label: "곶" }
+  ];
+  var dist = 0, best = 0, frame = 0, speed = 0.07, travel = 0, zScroll = 0;
+  var spawnTimer = 0, itemTimer = 0, invuln = 0;
+  function spawnLandmark() {
+    var lm = LM_TYPES[lmIndex % LM_TYPES.length]; lmIndex++;
+    var side = (lmIndex % 2 === 0) ? -1 : 1;
+    landmarks.push({ kind: lm.kind, label: lm.label, side: side, off: side * trackHalf * (1.55 + Math.random() * 0.25), z: ZFAR });
+  }
+  var boostTimer = 0, boostActive = false;
+
+  try { best = parseInt(localStorage.getItem("seaBest") || "0", 10) || 0; } catch (e) { best = 0; }
+  document.getElementById("bestDist").textContent = best;
+
+  var TYPES = [
+    { kind: "shark", r: 46, w: 0.22 },
+    { kind: "fish",  r: 28, w: 0.30 },
+    { kind: "fish2", r: 30, w: 0.20 },
+    { kind: "jelly", r: 34, w: 0.18 },
+    { kind: "star",  r: 28, w: 0.10 }
+  ];
+  function pickType() {
+    var sum = 0, i;
+    for (i = 0; i < TYPES.length; i++) sum += TYPES[i].w;
+    var r = Math.random() * sum;
+    for (i = 0; i < TYPES.length; i++) { r -= TYPES[i].w; if (r <= 0) return TYPES[i]; }
+    return TYPES[0];
+  }
+
+  function newGame() {
+    obstacles = []; items = []; particles = [];
+    dist = 0; frame = 0; speed = 0.07; travel = 0; zScroll = 0;
+    spawnTimer = 0; itemTimer = 420; invuln = 50;
+    boostTimer = 0; boostActive = false;
+    landmarks = []; landmarkTimer = 90;
+    swimmer.lane = 1; swimmer.offset = 0;
+    caps = [];
+    for (var ci = 0; ci < 16; ci++) caps.push({ off: (Math.random() - 0.5) * trackHalf * 2.2, z: Math.random() * ZFAR, r: 5 + Math.random() * 7 });
+    state = "playing";
+    updateHUD();
+  }
+
+  function spawnRow() {
+    var maxBlocked = (dist > 130) ? 2 : 1;
+    var numBlocked = 1 + ((Math.random() < 0.4 && dist > 130) ? 1 : 0);
+    numBlocked = Math.min(numBlocked, maxBlocked, LANES - 1);
+    var idx = [0, 1, 2];
+    for (var i = idx.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+    for (var n = 0; n < numBlocked; n++) {
+      var lane = idx[n], ty = pickType();
+      obstacles.push({ t: ty, lane: lane, off: laneOffset(lane), z: ZFAR, phase: Math.random() * 6.28, resolved: false });
+    }
+  }
+  function spawnBooster() {
+    var lane = Math.floor(Math.random() * LANES);
+    items.push({ lane: lane, off: laneOffset(lane), z: ZFAR, resolved: false });
+  }
+  function spawnSplash(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * 6.28, sp = 1 + Math.random() * 4;
+      particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1, life: 24, max: 24, r: 3 + Math.random() * 4, color: color });
+    }
+  }
+  function activateBoost() {
+    boostActive = true; boostTimer = BOOST_MAX;
+    spawnSplash(W / 2 + swimmer.offset, SWY, "rgba(120,230,255,0.9)", 18);
+  }
+
+  function endGame() {
+    state = "over";
+    var m = Math.floor(dist);
+    document.getElementById("finalDist").textContent = m;
+    var msg;
+    if (m > best) {
+      best = m;
+      try { localStorage.setItem("seaBest", String(best)); } catch (e) {}
+      document.getElementById("bestDist").textContent = best;
+      msg = "🎉 새로운 최고 기록!";
+    } else { msg = "최고 기록: " + best + " m"; }
+    document.getElementById("recordMsg").textContent = msg;
+    document.getElementById("overScreen").classList.remove("hidden");
+  }
+  function updateHUD() { document.getElementById("curDist").textContent = Math.floor(dist); }
+
+  function moveLane(d) { if (state === "playing") swimmer.lane = Math.max(0, Math.min(LANES - 1, swimmer.lane + d)); }
+  var startX = null, swiped = false;
+  canvas.addEventListener("pointerdown", function (e) { e.preventDefault(); startX = e.clientX; swiped = false; });
+  canvas.addEventListener("pointermove", function (e) {
+    if (startX === null || swiped) return;
+    var dx = e.clientX - startX;
+    if (dx > 28) { moveLane(1); swiped = true; } else if (dx < -28) { moveLane(-1); swiped = true; }
+  });
+  canvas.addEventListener("pointerup", function (e) {
+    if (startX !== null && !swiped) {
+      var dx = e.clientX - startX;
+      if (Math.abs(dx) < 12) { var rect = canvas.getBoundingClientRect(); moveLane((e.clientX - rect.left < W / 2) ? -1 : 1); }
+      else moveLane(dx > 0 ? 1 : -1);
+    }
+    startX = null;
+  });
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "ArrowLeft") moveLane(-1); else if (e.code === "ArrowRight") moveLane(1);
+  });
+  document.getElementById("startBtn").addEventListener("click", function () { document.getElementById("startScreen").classList.add("hidden"); newGame(); });
+  document.getElementById("retryBtn").addEventListener("click", function () { document.getElementById("overScreen").classList.add("hidden"); newGame(); });
+
+  for (var c = 0; c < 4; c++) clouds.push({ x: Math.random(), y: HZ * (0.2 + Math.random() * 0.55), s: 0.7 + Math.random() * 0.9, v: 0.02 + Math.random() * 0.03 });
+  for (var gi = 0; gi < 4; gi++) gulls.push({ x: Math.random(), y: HZ * (0.18 + Math.random() * 0.45), v: 0.04 + Math.random() * 0.05, ph: Math.random() * 6.28 });
+
+  // ---- 그리기 ----
+  function drawSky() {
+    var g = ctx.createLinearGradient(0, 0, 0, HZ);
+    g.addColorStop(0, "#79c6ec"); g.addColorStop(1, "#dff4f9");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, HZ);
+    var sx = W * 0.78, sy = HZ * 0.36;
+    var sg = ctx.createRadialGradient(sx, sy, 6, sx, sy, 80);
+    sg.addColorStop(0, "rgba(255,247,200,0.95)"); sg.addColorStop(1, "rgba(255,247,200,0)");
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, 80, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff6c4"; ctx.beginPath(); ctx.arc(sx, sy, 26, 0, 7); ctx.fill();
+    for (var i = 0; i < clouds.length; i++) {
+      var cl = clouds[i]; cl.x += cl.v * 0.004; if (cl.x > 1.2) cl.x = -0.2;
+      var cx = cl.x * W, cy = cl.y, s = cl.s;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 16 * s, 0, 7); ctx.arc(cx + 18 * s, cy + 4 * s, 12 * s, 0, 7);
+      ctx.arc(cx - 18 * s, cy + 4 * s, 12 * s, 0, 7); ctx.arc(cx, cy + 9 * s, 20 * s, 0, 7); ctx.fill();
+    }
+    // 갈매기
+    ctx.strokeStyle = "rgba(70,90,100,0.6)"; ctx.lineWidth = 2;
+    for (var k = 0; k < gulls.length; k++) {
+      var gu = gulls[k]; gu.x += gu.v * 0.004; if (gu.x > 1.2) gu.x = -0.2;
+      var gx = gu.x * W, gy = gu.y, fl = Math.sin(frame * 0.14 + gu.ph) * 3;
+      ctx.beginPath();
+      ctx.moveTo(gx - 9, gy); ctx.quadraticCurveTo(gx - 4, gy - 5 - fl, gx, gy);
+      ctx.quadraticCurveTo(gx + 4, gy - 5 - fl, gx + 9, gy); ctx.stroke();
+    }
+    // 먼 섬 + 등대
+    ctx.fillStyle = "#9fd0a8";
+    island(W * 0.16, HZ, 84, 24); island(W * 0.45, HZ, 50, 14); island(W * 0.92, HZ, 60, 16);
+    lighthouse(W * 0.16, HZ - 18);
+    ctx.fillStyle = "#e8dca0"; ctx.fillRect(0, HZ - 3, W, 5);
+    // 먼 돛단배
+    sail.x += sail.v; if (sail.x > 1.15) sail.x = -0.15;
+    sailboat(sail.x * W, HZ - 6);
+  }
+  function lighthouse(cx, baseY) {
+    ctx.fillStyle = "#f4f4f4";
+    ctx.beginPath(); ctx.moveTo(cx - 7, baseY); ctx.lineTo(cx - 5, baseY - 30); ctx.lineTo(cx + 5, baseY - 30); ctx.lineTo(cx + 7, baseY); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#e8453c"; ctx.fillRect(cx - 6, baseY - 24, 12, 5); ctx.fillRect(cx - 5, baseY - 12, 10, 5);
+    ctx.fillStyle = "#ffe07a"; ctx.fillRect(cx - 4, baseY - 38, 8, 8);
+    ctx.fillStyle = "#557"; ctx.fillRect(cx - 5, baseY - 30, 10, 2);
+  }
+  function sailboat(cx, baseY) {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.moveTo(cx, baseY - 22); ctx.lineTo(cx, baseY - 2); ctx.lineTo(cx + 14, baseY - 2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#cfe7f2";
+    ctx.beginPath(); ctx.moveTo(cx - 1, baseY - 20); ctx.lineTo(cx - 13, baseY - 2); ctx.lineTo(cx - 1, baseY - 2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#8a5a2c";
+    ctx.beginPath(); ctx.moveTo(cx - 14, baseY - 1); ctx.lineTo(cx + 14, baseY - 1); ctx.lineTo(cx + 9, baseY + 5); ctx.lineTo(cx - 9, baseY + 5); ctx.closePath(); ctx.fill();
+  }
+  function island(cx, baseY, w, h) {
+    ctx.beginPath(); ctx.moveTo(cx - w, baseY);
+    ctx.quadraticCurveTo(cx, baseY - h * 2.4, cx + w, baseY); ctx.closePath(); ctx.fill();
+  }
+
+  function drawSea() {
+    // 깔끔한 바다 (트랙 줄무늬 없음)
+    var g = ctx.createLinearGradient(0, HZ, 0, H);
+    g.addColorStop(0, "#2a93c8"); g.addColorStop(0.5, "#1877ad"); g.addColorStop(1, "#0a4f7d");
+    ctx.fillStyle = g; ctx.fillRect(0, HZ, W, H - HZ);
+    // 햇빛 윤슬 (수면 반사)
+    ctx.save(); ctx.globalAlpha = 0.12; ctx.fillStyle = "#fff2b0";
+    for (var sg2 = (zScroll % 0.7); sg2 < ZFAR; sg2 += 0.7) {
+      var pg = project(W * 0.28, sg2);
+      ctx.beginPath(); ctx.ellipse(pg.x, pg.y, Math.max(2, 22 * pg.s), Math.max(1, 3 * pg.s), 0, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    // 다가오는 반짝임 (속도감)
+    ctx.save(); ctx.globalAlpha = 0.10; ctx.fillStyle = "#cdeeff";
+    for (var s2 = (zScroll % 0.8); s2 < ZFAR; s2 += 0.8) {
+      var p = project(0, s2), hw = trackHalf * p.s;
+      ctx.beginPath(); ctx.ellipse(W / 2, p.y, hw * 0.6, Math.max(1, 4 * p.s), 0, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    // 흰 물거품(whitecaps)
+    ctx.save();
+    for (var wc = 0; wc < caps.length; wc++) {
+      var cp = caps[wc], pc = project(cp.off, cp.z);
+      ctx.globalAlpha = 0.18 + 0.22 * pc.s;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath(); ctx.ellipse(pc.x, pc.y, cp.r * pc.s * 1.4, Math.max(0.8, cp.r * pc.s * 0.5), 0, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    // 레인 구분선 (은은한 흰 선)
+    drawRope(-trackHalf); drawRope(trackHalf);
+    drawRope(-trackHalf / 3); drawRope(trackHalf / 3);
+  }
+  function drawRope(off) {
+    var a = project(off, 0.02), b = project(off, ZFAR);
+    var edge = (Math.abs(off) > trackHalf - 1);
+    ctx.strokeStyle = edge ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+
+  function freeArm(side, phase) {
+    // phase>0: 물 위로 회복(스트로크), phase<0: 물속 당기기(희미)
+    var shX = side * 11, shY = -4;
+    if (phase > 0) {
+      var handX = side * (26 - phase * 6), handY = -22 - phase * 16;
+      var elbowX = side * 30, elbowY = -8 - phase * 14;
+      ctx.strokeStyle = "#f2c79b"; ctx.lineWidth = 7; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(shX, shY); ctx.quadraticCurveTo(elbowX, elbowY, handX, handY); ctx.stroke();
+      // 손끝 입수/물보라
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.beginPath(); ctx.arc(handX, handY, 3.5, 0, 7); ctx.fill();
+    } else {
+      ctx.strokeStyle = "rgba(242,199,155,0.4)"; ctx.lineWidth = 7; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(shX, shY); ctx.lineTo(side * 18, 8); ctx.stroke();
+    }
+  }
+  function drawSwimmer() {
+    var x = W / 2 + swimmer.offset, y = SWY, sc = 1.5;
+    ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc);
+    if (invuln > 0 && Math.floor(invuln / 5) % 2 === 0) ctx.globalAlpha = 0.5;
+    var t = frame * 0.22;
+    var stroke = Math.sin(t);
+    var roll = stroke * 3.5;
+    // 물속 몸통/다리 (희미하게 잠김)
+    ctx.fillStyle = "rgba(150,210,235,0.30)";
+    ctx.beginPath(); ctx.ellipse(0, 10, 12, 30, 0, 0, 7); ctx.fill();
+    // 발차기 추진 거품 (뒤=화면 아래)
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    for (var f = 0; f < 7; f++) {
+      var fx = Math.sin(t * 1.4 + f) * 9;
+      ctx.beginPath(); ctx.arc(fx, 26 + f * 6, 8 - f * 0.8, 0, 7); ctx.fill();
+    }
+    // 물속 당기는 팔 먼저
+    if (stroke <= 0) freeArm(-1, stroke); if (-stroke <= 0) freeArm(1, -stroke);
+    // 몸 주변 하얀 물거품 (수면 위로 보이는 부분)
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.beginPath(); ctx.ellipse(roll * 0.5, 0, 18, 13, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath(); ctx.ellipse(0, -8, 13, 9, 0, 0, 7); ctx.fill();
+    // 머리 + 수영모 (앞쪽, 숨쉬기 롤)
+    ctx.fillStyle = "#f2c79b"; ctx.beginPath(); ctx.arc(roll, -16, 11, 0, 7); ctx.fill();
+    ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.arc(roll, -18, 11, Math.PI * 1.02, Math.PI * 2.02); ctx.fill();
+    ctx.fillStyle = "#1c3b52"; ctx.fillRect(roll - 9, -17, 6, 3); // 물안경 옆
+    // 물 위로 회복하는 팔 (머리 위에 그림)
+    if (stroke > 0) freeArm(-1, stroke); if (-stroke > 0) freeArm(1, -stroke);
+    // 머리 앞 물보라
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath(); ctx.arc(roll - 12, -20, 3, 0, 7); ctx.arc(roll + 11, -22, 2.5, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBoat() {
+    var x = W / 2 + swimmer.offset, y = SWY, sc = 1.5;
+    ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc);
+    // 무적 오라
+    var glow = 0.4 + 0.25 * Math.sin(frame * 0.3);
+    ctx.fillStyle = "rgba(120,230,255," + glow + ")";
+    ctx.beginPath(); ctx.ellipse(0, -4, 40, 46, 0, 0, 7); ctx.fill();
+    // 큰 물보라 V (뒤=아래)
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-34, 44 + Math.sin(frame * 0.4) * 4); ctx.lineTo(-12, 30); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(34, 44 - Math.sin(frame * 0.4) * 4); ctx.lineTo(12, 30); ctx.closePath(); ctx.fill();
+    // 선체 (앞이 뾰족)
+    ctx.fillStyle = "#f4f7fa";
+    ctx.beginPath();
+    ctx.moveTo(0, -34); ctx.lineTo(-20, 6); ctx.lineTo(-16, 24); ctx.lineTo(16, 24); ctx.lineTo(20, 6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#e8453c"; // 빨간 띠
+    ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(-16, 6); ctx.lineTo(-13, 18); ctx.lineTo(13, 18); ctx.lineTo(16, 6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#2a4a58"; ctx.fillRect(-12, 2, 24, 9); // 조종석
+    // 사람 머리
+    ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.arc(0, -2, 8, 0, 7); ctx.fill();
+    ctx.fillStyle = "#f2c79b"; ctx.beginPath(); ctx.arc(0, 1, 8, 0, Math.PI); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBooster(px, py, sc) {
+    var r = 26 * sc;
+    var pulse = 1 + 0.12 * Math.sin(frame * 0.3);
+    ctx.save(); ctx.translate(px, py); ctx.scale(pulse, pulse);
+    // 빛무리
+    var g = ctx.createRadialGradient(0, 0, 2, 0, 0, r * 1.6);
+    g.addColorStop(0, "rgba(120,230,255,0.9)"); g.addColorStop(1, "rgba(120,230,255,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r * 1.6, 0, 7); ctx.fill();
+    // 코어
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    ctx.fillStyle = "#19b6e6"; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, 7); ctx.fill();
+    // 번개 ⚡
+    ctx.fillStyle = "#fff21f";
+    ctx.beginPath();
+    ctx.moveTo(r * 0.18, -r * 0.6); ctx.lineTo(-r * 0.28, r * 0.08); ctx.lineTo(r * 0.02, r * 0.08);
+    ctx.lineTo(-r * 0.16, r * 0.62); ctx.lineTo(r * 0.34, -r * 0.1); ctx.lineTo(r * 0.04, -r * 0.1);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLabel(px, topY, text, s) {
+    var fs = Math.max(12, Math.min(22, 24 * s));
+    ctx.font = "bold " + fs + "px sans-serif"; ctx.textAlign = "center";
+    var tw = ctx.measureText(text).width, padX = 8, h = fs + 8;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.beginPath(); ctx.rect(px - tw / 2 - padX, topY - h, tw + padX * 2, h); ctx.fill();
+    ctx.fillStyle = "#0a5a85";
+    ctx.fillText(text, px, topY - h / 2 + fs * 0.36);
+    ctx.textAlign = "left";
+  }
+
+  function drawLandmark(lm, px, py, s) {
+    var u = 34 * s, k = lm.kind;
+    ctx.save(); ctx.translate(px, py);
+    // 물그림자
+    ctx.fillStyle = "rgba(0,30,55,0.15)"; ctx.beginPath(); ctx.ellipse(0, 2, u * 0.9, u * 0.28, 0, 0, 7); ctx.fill();
+    if (k === "lighthouse") {
+      ctx.fillStyle = "#f4f4f4";
+      ctx.beginPath(); ctx.moveTo(-u * 0.28, 0); ctx.lineTo(-u * 0.18, -u * 1.4); ctx.lineTo(u * 0.18, -u * 1.4); ctx.lineTo(u * 0.28, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#e8453c"; ctx.fillRect(-u * 0.24, -u * 1.0, u * 0.48, u * 0.2); ctx.fillRect(-u * 0.2, -u * 0.5, u * 0.4, u * 0.2);
+      ctx.fillStyle = "#ffe07a"; ctx.fillRect(-u * 0.16, -u * 1.7, u * 0.32, u * 0.3);
+    } else if (k === "breakwater") {
+      ctx.fillStyle = "#9aa3a8";
+      for (var i = -1; i <= 1; i++) {
+        ctx.beginPath(); ctx.moveTo(i * u * 0.5, 0); ctx.lineTo(i * u * 0.5 - u * 0.32, -u * 0.7); ctx.lineTo(i * u * 0.5 + u * 0.32, -u * 0.7); ctx.closePath(); ctx.fill();
+      }
+      ctx.fillStyle = "#7e878c"; ctx.fillRect(-u * 0.9, -u * 0.12, u * 1.8, u * 0.14);
+    } else if (k === "rocks") {
+      ctx.fillStyle = "#7c8a90";
+      ctx.beginPath(); ctx.ellipse(-u * 0.4, -u * 0.2, u * 0.5, u * 0.4, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(u * 0.35, -u * 0.25, u * 0.45, u * 0.38, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#94a1a6"; ctx.beginPath(); ctx.ellipse(0, -u * 0.55, u * 0.5, u * 0.42, 0, 0, 7); ctx.fill();
+    } else if (k === "beach") {
+      ctx.fillStyle = "#f0e0a8"; ctx.beginPath(); ctx.ellipse(0, 0, u * 0.95, u * 0.42, 0, 0, 7); ctx.fill();
+      // 파라솔
+      ctx.strokeStyle = "#7a5a2c"; ctx.lineWidth = Math.max(1, u * 0.06);
+      ctx.beginPath(); ctx.moveTo(u * 0.2, 0); ctx.lineTo(u * 0.2, -u * 0.8); ctx.stroke();
+      ctx.fillStyle = "#e8453c"; ctx.beginPath(); ctx.arc(u * 0.2, -u * 0.8, u * 0.4, Math.PI, 0); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(u * 0.2, -u * 0.8); ctx.arc(u * 0.2, -u * 0.8, u * 0.4, Math.PI, Math.PI * 1.25); ctx.closePath(); ctx.fill();
+    } else if (k === "mudflat") {
+      ctx.fillStyle = "#a98a5e";
+      ctx.beginPath(); ctx.ellipse(0, 0, u * 0.95, u * 0.4, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#8c7048";
+      ctx.beginPath(); ctx.arc(-u * 0.3, -u * 0.05, u * 0.07, 0, 7); ctx.arc(u * 0.25, u * 0.05, u * 0.06, 0, 7); ctx.arc(u * 0.05, -u * 0.12, u * 0.05, 0, 7); ctx.fill();
+      // 조개
+      ctx.fillStyle = "#f3d9c0"; ctx.beginPath(); ctx.arc(-u * 0.05, -u * 0.02, u * 0.13, Math.PI, 0); ctx.fill();
+    } else if (k === "harbor") {
+      ctx.fillStyle = "#8a6a44"; ctx.fillRect(-u * 0.9, -u * 0.16, u * 1.8, u * 0.18); // 부두
+      ctx.fillStyle = "#6e5436"; ctx.fillRect(-u * 0.7, 0, u * 0.1, u * 0.3); ctx.fillRect(u * 0.6, 0, u * 0.1, u * 0.3);
+      // 작은 배
+      ctx.fillStyle = "#e8453c"; ctx.beginPath(); ctx.moveTo(-u * 0.4, -u * 0.16); ctx.lineTo(u * 0.4, -u * 0.16); ctx.lineTo(u * 0.25, -u * 0.5); ctx.lineTo(-u * 0.25, -u * 0.5); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(0, -u * 0.5); ctx.lineTo(0, -u * 1.0); ctx.lineTo(u * 0.4, -u * 0.55); ctx.closePath(); ctx.fill();
+    } else if (k === "cape") {
+      ctx.fillStyle = "#7fb88a";
+      ctx.beginPath(); ctx.moveTo(-u * 0.9, 0); ctx.quadraticCurveTo(u * 0.1, -u * 0.3, u * 0.95, -u * 0.9); ctx.lineTo(u * 0.95, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#6aa676"; ctx.beginPath(); ctx.moveTo(u * 0.95, -u * 0.9); ctx.lineTo(u * 0.95, 0); ctx.lineTo(u * 0.4, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#7c8a90"; ctx.beginPath(); ctx.arc(u * 0.7, -u * 0.05, u * 0.18, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    if (s > 0.24) drawLabel(px, py - 54 * s, lm.label, s);
+  }
+
+  function drawObstacle(o, px, py, sc) {
+    var r = o.t.r * sc, k = o.t.kind;
+    ctx.save(); ctx.translate(px, py);
+    ctx.fillStyle = "rgba(0,30,55,0.20)"; ctx.beginPath(); ctx.ellipse(0, r * 0.7, r * 0.75, r * 0.3, 0, 0, 7); ctx.fill();
+    if (k === "shark") {
+      ctx.fillStyle = "#7d93a3";
+      ctx.beginPath(); ctx.ellipse(0, 0, r * 0.6, r, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0, -r * 0.2); ctx.lineTo(-r * 0.55, -r * 0.55); ctx.lineTo(0, -r * 0.6); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(-r * 0.45, -r * 1.35); ctx.lineTo(r * 0.45, -r * 1.35); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#cdd9e0"; ctx.beginPath(); ctx.ellipse(0, r * 0.3, r * 0.4, r * 0.6, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#16222b";
+      ctx.beginPath(); ctx.arc(-r * 0.24, r * 0.45, r * 0.09, 0, 7); ctx.arc(r * 0.24, r * 0.45, r * 0.09, 0, 7); ctx.fill();
+      ctx.fillStyle = "#fff";
+      for (var tt = -2; tt <= 2; tt++) { ctx.beginPath(); ctx.moveTo(tt * r * 0.18 - r * 0.07, r * 0.72); ctx.lineTo(tt * r * 0.18, r * 0.86); ctx.lineTo(tt * r * 0.18 + r * 0.07, r * 0.72); ctx.closePath(); ctx.fill(); }
+    } else if (k === "fish" || k === "fish2") {
+      var col = k === "fish" ? "#ff9f1c" : "#9b5de5";
+      ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.7, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(0, -r * 0.5); ctx.lineTo(-r * 0.7, -r); ctx.lineTo(r * 0.7, -r); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(-r * 0.4, r * 0.15, r * 0.22, 0, 7); ctx.arc(r * 0.4, r * 0.15, r * 0.22, 0, 7); ctx.fill();
+      ctx.fillStyle = "#222"; ctx.beginPath(); ctx.arc(-r * 0.4, r * 0.15, r * 0.1, 0, 7); ctx.arc(r * 0.4, r * 0.15, r * 0.1, 0, 7); ctx.fill();
+    } else if (k === "jelly") {
+      ctx.fillStyle = "rgba(255,140,200,0.9)";
+      ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, 0); ctx.fill();
+      ctx.fillRect(-r, 0, r * 2, 2);
+      ctx.strokeStyle = "rgba(255,140,200,0.85)"; ctx.lineWidth = Math.max(1.5, r * 0.13); ctx.lineCap = "round";
+      for (var t = -2; t <= 2; t++) {
+        ctx.beginPath(); ctx.moveTo(t * r * 0.35, 0);
+        ctx.quadraticCurveTo(t * r * 0.35 + Math.sin(frame * 0.15 + t) * 5, r * 0.9, t * r * 0.35, r * 1.4); ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.4, r * 0.18, 0, 7); ctx.fill();
+    } else if (k === "star") {
+      ctx.fillStyle = "#ff8f3c"; ctx.rotate(o.phase + frame * 0.02);
+      ctx.beginPath();
+      for (var s = 0; s < 5; s++) {
+        var a = s * 2 * Math.PI / 5 - Math.PI / 2;
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        var a2 = a + Math.PI / 5; ctx.lineTo(Math.cos(a2) * r * 0.45, Math.sin(a2) * r * 0.45);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawSpeedLines() {
+    ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 4; ctx.lineCap = "round";
+    for (var i = 0; i < 6; i++) {
+      var side = (i % 2 === 0) ? 1 : -1;
+      var lx = W / 2 + side * (trackHalf * 0.7 + (i * 40));
+      var off = (frame * 40 + i * 90) % H;
+      ctx.beginPath(); ctx.moveTo(lx, off - 70); ctx.lineTo(lx, off); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBoostBar() {
+    var bw = Math.min(W * 0.6, 320), bh = 14;
+    var bx = (W - bw) / 2, by = H - 36;
+    ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+    ctx.fillStyle = "rgba(255,255,255,0.3)"; ctx.fillRect(bx, by, bw, bh);
+    var ratio = boostTimer / BOOST_MAX;
+    var g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+    g.addColorStop(0, "#19b6e6"); g.addColorStop(1, "#7df0ff");
+    ctx.fillStyle = g; ctx.fillRect(bx, by, bw * ratio, bh);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("⚡ 부스터!", W / 2, by - 8); ctx.textAlign = "left";
+  }
+
+  function loop() {
+    frame++;
+    if (state === "playing") {
+      speed = 0.056 + Math.min(0.065, dist / 2900);
+      var eff = speed * (boostActive ? 1.9 : 1);
+      travel += eff; zScroll += eff * 1.4;
+      dist += eff * 11;
+      if (frame % 5 === 0) updateHUD();
+      if (invuln > 0) invuln--;
+      if (boostActive) { boostTimer--; if (boostTimer <= 0) boostActive = false; }
+
+      swimmer.offset += (laneOffset(swimmer.lane) - swimmer.offset) * 0.30;
+
+      spawnTimer--;
+      var interval = Math.max(18, 40 - Math.floor(dist / 22));
+      if (spawnTimer <= 0) { spawnRow(); spawnTimer = interval; }
+      itemTimer--;
+      if (itemTimer <= 0) { spawnBooster(); itemTimer = 520 + Math.floor(Math.random() * 280); }
+      landmarkTimer--;
+      if (landmarkTimer <= 0) { spawnLandmark(); landmarkTimer = 150 + Math.floor(Math.random() * 90); }
+      for (var lmi = landmarks.length - 1; lmi >= 0; lmi--) {
+        landmarks[lmi].z -= eff;
+        if (landmarks[lmi].z < -0.6) landmarks.splice(lmi, 1);
+      }
+
+      // 장애물
+      for (var i = obstacles.length - 1; i >= 0; i--) {
+        var o = obstacles[i];
+        o.z -= eff;
+        if (!o.resolved && o.z <= COLL_Z) {
+          o.resolved = true;
+          if (o.lane === swimmer.lane) {
+            if (boostActive) {
+              var pp = project(o.off, o.z);
+              spawnSplash(pp.x, pp.y, "rgba(200,240,255,0.9)", 12);
+              obstacles.splice(i, 1); continue;
+            } else if (invuln <= 0) { endGame(); }
+          }
+        }
+        if (o.z < -0.5) obstacles.splice(i, 1);
+      }
+      // 아이템
+      for (var j = items.length - 1; j >= 0; j--) {
+        var it = items[j];
+        it.z -= eff;
+        if (!it.resolved && it.z <= COLL_Z) {
+          it.resolved = true;
+          if (it.lane === swimmer.lane) { activateBoost(); items.splice(j, 1); continue; }
+        }
+        if (it.z < -0.5) items.splice(j, 1);
+      }
+      // 물거품 스크롤
+      for (var wc = caps.length - 1; wc >= 0; wc--) {
+        var cp = caps[wc]; cp.z -= eff;
+        if (cp.z <= 0) { cp.z = ZFAR; cp.off = (Math.random() - 0.5) * trackHalf * 2.2; cp.r = 5 + Math.random() * 7; }
+      }
+      // 파티클
+      for (var k = particles.length - 1; k >= 0; k--) {
+        var pt = particles[k]; pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.25; pt.life--;
+        if (pt.life <= 0) particles.splice(k, 1);
+      }
+    }
+
+    // 렌더
+    drawSky();
+    drawSea();
+
+    // 해안 지형물 (코스 옆, 먼 것부터)
+    landmarks.sort(function (p, q) { return q.z - p.z; });
+    for (var lm = 0; lm < landmarks.length; lm++) {
+      var L = landmarks[lm], pl = project(L.off, Math.max(L.z, -0.6));
+      drawLandmark(L, pl.x, pl.y, pl.s);
+    }
+
+    // 장애물+아이템 먼 것부터
+    var rl = [];
+    for (var a = 0; a < obstacles.length; a++) rl.push({ kind: "ob", o: obstacles[a] });
+    for (var b = 0; b < items.length; b++) rl.push({ kind: "it", o: items[b] });
+    rl.sort(function (p, q) { return q.o.z - p.o.z; });
+    for (var m = 0; m < rl.length; m++) {
+      var e = rl[m], p = project(e.o.off, Math.max(e.o.z, -0.5));
+      if (e.kind === "ob") drawObstacle(e.o, p.x, p.y, p.s * 2.0);
+      else drawBooster(p.x, p.y, p.s * 1.8);
+    }
+
+    // 파티클
+    for (var n = 0; n < particles.length; n++) {
+      var pt2 = particles[n];
+      ctx.globalAlpha = pt2.life / pt2.max; ctx.fillStyle = pt2.color;
+      ctx.beginPath(); ctx.arc(pt2.x, pt2.y, pt2.r, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // 캐릭터
+    if (state === "playing" || state === "over") {
+      if (boostActive) { drawSpeedLines(); drawBoat(); } else { drawSwimmer(); }
+    }
+    if (boostActive) drawBoostBar();
+
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
