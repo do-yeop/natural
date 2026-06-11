@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>평야 작물 팡 - 평지 부스</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: #cdebb0; user-select: none; -webkit-user-select: none; touch-action: none;
+  }
+  #game { display: block; width: 100vw; height: 100vh; touch-action: none; }
+
+  #hud {
+    position: fixed; top: 0; left: 0; width: 100%;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 12px 14px; pointer-events: none; z-index: 5;
+  }
+  .panel {
+    background: rgba(255,255,255,0.88); border-radius: 14px; padding: 6px 14px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.18); text-align: center;
+  }
+  .label { font-size: 13px; color: #5e7a3e; font-weight: 700; }
+  .value { font-size: 26px; color: #3a4f1f; font-weight: 900; line-height: 1.1; }
+
+  .overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    background: rgba(40, 55, 30, 0.55); color: #fff; text-align: center; padding: 22px;
+  }
+  .overlay.hidden { display: none; }
+  .card {
+    background: rgba(255,255,255,0.96); color: #2e3a1c; border-radius: 24px;
+    padding: 28px 30px; max-width: 440px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  }
+  .card h1 { font-size: 32px; margin-bottom: 6px; color: #5d9a3a; }
+  .card .emoji { font-size: 48px; margin-bottom: 6px; }
+  .card p { font-size: 18px; line-height: 1.55; margin-bottom: 10px; color: #4a5733; }
+  .card .big { font-size: 44px; font-weight: 900; color: #4e8a2c; margin: 6px 0; }
+  .btn {
+    display: inline-block; margin-top: 14px; background: #5d9a3a; color: #fff; border: none;
+    font-size: 23px; font-weight: 800; padding: 15px 44px; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 5px 0 #437328; transition: transform .05s;
+  }
+  .btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #437328; }
+  .hint { margin-top: 12px; font-size: 15px; color: #7a8a5e; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="panel"><div class="label">점수</div><div class="value"><span id="curScore">0</span></div></div>
+  <div class="panel"><div class="label">🏆 최고 점수</div><div class="value"><span id="bestScore">0</span></div></div>
+</div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <div class="emoji">🌾</div>
+    <h1>평야 작물 팡!</h1>
+    <p>평야에서 거둔 작물을 정리해요!<br>같은 작물 <b>3개 이상</b>을 한 줄로 모으면<br><b>팡!</b> 터지고 점수가 올라요.</p>
+    <p>작물을 <b>옆 칸으로 밀어서(스와이프)</b> 맞춰요.<br>⏱️ <b>60초</b> 안에 최대한 많이!</p>
+    <button class="btn" id="startBtn">시작하기</button>
+    <div class="hint">연쇄로 터지면 콤보 보너스 점수! 🌟</div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="overScreen">
+  <div class="card">
+    <div class="emoji">🧺</div>
+    <h1>수확 끝!</h1>
+    <p>이번 점수</p>
+    <div class="big"><span id="finalScore">0</span> 점</div>
+    <p id="recordMsg"></p>
+    <button class="btn" id="retryBtn">다시 하기</button>
+    <div class="hint">친구와 누가 더 높은 점수를 내는지 겨뤄봐요!</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  var W = 0, H = 0;
+
+  var COLS = 7, ROWS = 8, NTYPES = 6;
+  var tile = 0, originX = 0, originY = 0;
+  var GAME_TIME = 60;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    tile = Math.floor(Math.min(W * 0.9 / COLS, H * 0.64 / ROWS));
+    originX = Math.floor((W - COLS * tile) / 2);
+    originY = Math.floor(H * 0.22 + (H * 0.74 - ROWS * tile) / 2);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function cx(c) { return originX + c * tile + tile / 2; }
+  function cy(r) { return originY + r * tile + tile / 2; }
+
+  var board = [], offY = [];
+  var state = "start", phase = "idle";
+  var score = 0, best = 0, combo = 1;
+  var startTime = 0, timeLeft = GAME_TIME;
+  var selected = null, downCell = null, downX = 0, downY = 0, swiped = false;
+  var swap = null, poppers = [], floats = [], popTimer = 0;
+  var frame = 0;
+  var idleTimer = 0, hint = null, HINT_DELAY = 220;
+  var clouds = [];
+  for (var ci = 0; ci < 3; ci++) clouds.push({ x: Math.random(), y: 0.03 + Math.random() * 0.08, s: 0.6 + Math.random() * 0.7, v: 0.02 + Math.random() * 0.03 });
+
+  try { best = parseInt(localStorage.getItem("plainMatch3Best") || "0", 10) || 0; } catch (e) { best = 0; }
+  document.getElementById("bestScore").textContent = best;
+
+  function randType() { return Math.floor(Math.random() * NTYPES); }
+
+  function genBoard() {
+    board = []; offY = [];
+    for (var r = 0; r < ROWS; r++) {
+      board[r] = []; offY[r] = [];
+      for (var c = 0; c < COLS; c++) {
+        var t;
+        do { t = randType(); }
+        while ((c >= 2 && board[r][c - 1] === t && board[r][c - 2] === t) ||
+               (r >= 2 && board[r - 1][c] === t && board[r - 2][c] === t));
+        board[r][c] = t; offY[r][c] = 0;
+      }
+    }
+  }
+
+  function newGame() {
+    genBoard();
+    score = 0; combo = 1; phase = "idle"; selected = null;
+    swap = null; poppers = []; floats = []; idleTimer = 0; hint = null;
+    startTime = now(); timeLeft = GAME_TIME;
+    state = "playing"; updateHUD();
+  }
+  function now() { return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now(); }
+
+  function adjacent(a, b) { return (Math.abs(a.r - b.r) + Math.abs(a.c - b.c)) === 1; }
+  function swapTypes(a, b) { var t = board[a.r][a.c]; board[a.r][a.c] = board[b.r][b.c]; board[b.r][b.c] = t; }
+
+  function findMatches() {
+    var mark = [];
+    for (var r = 0; r < ROWS; r++) { mark[r] = []; for (var c = 0; c < COLS; c++) mark[r][c] = false; }
+    for (r = 0; r < ROWS; r++) {
+      var c = 0;
+      while (c < COLS) {
+        var t = board[r][c];
+        if (t === -1) { c++; continue; }
+        var len = 1; while (c + len < COLS && board[r][c + len] === t) len++;
+        if (len >= 3) for (var k = 0; k < len; k++) mark[r][c + k] = true;
+        c += len;
+      }
+    }
+    for (c = 0; c < COLS; c++) {
+      var rr = 0;
+      while (rr < ROWS) {
+        var t2 = board[rr][c];
+        if (t2 === -1) { rr++; continue; }
+        var len2 = 1; while (rr + len2 < ROWS && board[rr + len2][c] === t2) len2++;
+        if (len2 >= 3) for (var k2 = 0; k2 < len2; k2++) mark[rr + k2][c] = true;
+        rr += len2;
+      }
+    }
+    var list = [];
+    for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) if (mark[r][c]) list.push({ r: r, c: c, t: board[r][c] });
+    return list;
+  }
+
+  function findHint() {
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      if (c + 1 < COLS) {
+        var a = { r: r, c: c }, b = { r: r, c: c + 1 };
+        swapTypes(a, b); var ok = findMatches().length > 0; swapTypes(a, b);
+        if (ok) return [a, b];
+      }
+      if (r + 1 < ROWS) {
+        var a2 = { r: r, c: c }, b2 = { r: r + 1, c: c };
+        swapTypes(a2, b2); var ok2 = findMatches().length > 0; swapTypes(a2, b2);
+        if (ok2) return [a2, b2];
+      }
+    }
+    return null;
+  }
+
+  function startClear() {
+    var m = findMatches();
+    if (m.length === 0) { phase = "idle"; combo = 1; return; }
+    var gained = m.length * 10 * combo;
+    score += gained; updateHUD();
+    if (combo > 1) floats.push({ x: W / 2, y: H * 0.5, text: combo + " 콤보! +" + gained, life: 60, max: 60, color: "#ff8c00" });
+    for (var i = 0; i < m.length; i++) {
+      poppers.push({ x: cx(m[i].c), y: cy(m[i].r), t: m[i].t, life: 16, max: 16 });
+      board[m[i].r][m[i].c] = -1;
+    }
+    popTimer = 16; phase = "clearing";
+  }
+
+  function startFall() {
+    for (var c = 0; c < COLS; c++) {
+      var write = ROWS - 1;
+      for (var r = ROWS - 1; r >= 0; r--) {
+        if (board[r][c] !== -1) {
+          if (r !== write) { board[write][c] = board[r][c]; offY[write][c] = (r - write) * tile; board[r][c] = -1; }
+          write--;
+        }
+      }
+      var k = 0;
+      for (var rr = write; rr >= 0; rr--) { board[rr][c] = randType(); offY[rr][c] = -(k + 1) * tile - tile; k++; }
+    }
+    phase = "falling";
+  }
+
+  function endGame() {
+    state = "over";
+    document.getElementById("finalScore").textContent = score;
+    var msg;
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem("plainMatch3Best", String(best)); } catch (e) {}
+      document.getElementById("bestScore").textContent = best;
+      msg = "🎉 새로운 최고 점수!";
+    } else { msg = "최고 점수: " + best + " 점"; }
+    document.getElementById("recordMsg").textContent = msg;
+    document.getElementById("overScreen").classList.remove("hidden");
+  }
+  function updateHUD() { document.getElementById("curScore").textContent = score; }
+
+  // ---- 입력 ----
+  function cellAt(px, py) {
+    var c = Math.floor((px - originX) / tile), r = Math.floor((py - originY) / tile);
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return null;
+    return { r: r, c: c };
+  }
+  function tryStartSwap(a, b) {
+    if (!a || !b || !adjacent(a, b)) return;
+    combo = 1;
+    swapTypes(a, b);
+    if (findMatches().length > 0) { swap = { a: a, b: b, prog: 0, back: false, valid: true }; }
+    else { swap = { a: a, b: b, prog: 0, back: false, valid: false }; }
+    phase = "swapping"; selected = null;
+  }
+  canvas.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    if (state !== "playing" || phase !== "idle") return;
+    var rect = canvas.getBoundingClientRect();
+    downX = e.clientX - rect.left; downY = e.clientY - rect.top;
+    downCell = cellAt(downX, downY); swiped = false;
+    idleTimer = 0; hint = null;
+  });
+  canvas.addEventListener("pointermove", function (e) {
+    if (!downCell || swiped || phase !== "idle") return;
+    var rect = canvas.getBoundingClientRect();
+    var dx = (e.clientX - rect.left) - downX, dy = (e.clientY - rect.top) - downY;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) > tile * 0.42) {
+      var nb;
+      if (Math.abs(dx) > Math.abs(dy)) nb = { r: downCell.r, c: downCell.c + (dx > 0 ? 1 : -1) };
+      else nb = { r: downCell.r + (dy > 0 ? 1 : -1), c: downCell.c };
+      if (nb.r >= 0 && nb.r < ROWS && nb.c >= 0 && nb.c < COLS) { tryStartSwap(downCell, nb); swiped = true; }
+    }
+  });
+  canvas.addEventListener("pointerup", function (e) {
+    if (state !== "playing" || phase !== "idle") { downCell = null; return; }
+    if (downCell && !swiped) {
+      var cell = downCell;
+      if (!selected) selected = cell;
+      else if (selected.r === cell.r && selected.c === cell.c) selected = null;
+      else if (adjacent(selected, cell)) tryStartSwap(selected, cell);
+      else selected = cell;
+    }
+    downCell = null;
+  });
+  document.getElementById("startBtn").addEventListener("click", function () { document.getElementById("startScreen").classList.add("hidden"); newGame(); });
+  document.getElementById("retryBtn").addEventListener("click", function () { document.getElementById("overScreen").classList.add("hidden"); newGame(); });
+
+  // ---- 작물 그리기 ----
+  var NAMES = ["사과", "당근", "옥수수", "배추", "가지", "고구마"];
+  function drawCrop(type, x, y, s) {
+    ctx.save(); ctx.translate(x, y);
+    if (type === 0) { // 사과
+      ctx.fillStyle = "#e23b2e"; ctx.beginPath(); ctx.arc(0, s * 0.05, s, 0, 7); ctx.fill();
+      ctx.fillStyle = "#7a4a22"; ctx.fillRect(-s * 0.08, -s - s * 0.3, s * 0.16, s * 0.4);
+      ctx.fillStyle = "#4caf50"; ctx.beginPath(); ctx.ellipse(s * 0.3, -s - s * 0.05, s * 0.3, s * 0.16, -0.6, 0, 7); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.45)"; ctx.beginPath(); ctx.arc(-s * 0.35, -s * 0.3, s * 0.25, 0, 7); ctx.fill();
+    } else if (type === 1) { // 당근
+      ctx.fillStyle = "#f08023"; ctx.beginPath(); ctx.moveTo(0, s * 1.05); ctx.lineTo(-s * 0.62, -s * 0.4); ctx.lineTo(s * 0.62, -s * 0.4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.3)"; ctx.fillRect(-s * 0.1, -s * 0.2, s * 0.12, s * 1.0);
+      ctx.fillStyle = "#3f9e46";
+      for (var i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(i * s * 0.25, -s * 0.4); ctx.lineTo(i * s * 0.45, -s * 1.0); ctx.lineTo(i * s * 0.05, -s * 0.45); ctx.closePath(); ctx.fill(); }
+    } else if (type === 2) { // 옥수수
+      ctx.fillStyle = "#f4c430"; ctx.beginPath(); ctx.ellipse(0, 0, s * 0.62, s, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#dca818";
+      for (var a = -2; a <= 2; a++) for (var b = -2; b <= 2; b++) { ctx.beginPath(); ctx.arc(a * s * 0.22, b * s * 0.34, s * 0.07, 0, 7); ctx.fill(); }
+      ctx.fillStyle = "#5fa83f"; ctx.beginPath(); ctx.moveTo(-s * 0.5, s * 0.55); ctx.lineTo(-s * 0.95, s * 1.05); ctx.lineTo(-s * 0.25, s * 0.9); ctx.closePath(); ctx.fill();
+    } else if (type === 3) { // 배추
+      ctx.fillStyle = "#7cc24a"; ctx.beginPath(); ctx.arc(0, 0, s, 0, 7); ctx.fill();
+      ctx.fillStyle = "#a7df74"; ctx.beginPath(); ctx.ellipse(0, s * 0.1, s * 0.55, s * 0.85, 0, 0, 7); ctx.fill();
+      ctx.strokeStyle = "#e8f6d4"; ctx.lineWidth = s * 0.12; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(0, s * 0.8); ctx.lineTo(0, -s * 0.6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, s * 0.4); ctx.lineTo(-s * 0.4, -s * 0.3); ctx.moveTo(0, s * 0.4); ctx.lineTo(s * 0.4, -s * 0.3); ctx.stroke();
+    } else if (type === 4) { // 가지
+      ctx.fillStyle = "#7e3fa6"; ctx.beginPath(); ctx.ellipse(0, s * 0.15, s * 0.78, s * 0.95, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#5e2b80"; ctx.beginPath(); ctx.ellipse(s * 0.25, s * 0.35, s * 0.4, s * 0.55, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = "#4caf50";
+      for (var e2 = 0; e2 < 5; e2++) { ctx.save(); ctx.rotate(e2 * 1.256); ctx.beginPath(); ctx.moveTo(0, -s * 0.7); ctx.lineTo(-s * 0.16, -s * 0.95); ctx.lineTo(s * 0.16, -s * 0.95); ctx.closePath(); ctx.fill(); ctx.restore(); }
+      ctx.fillStyle = "#7a4a22"; ctx.fillRect(-s * 0.07, -s * 1.1, s * 0.14, s * 0.3);
+      ctx.fillStyle = "rgba(255,255,255,0.35)"; ctx.beginPath(); ctx.ellipse(-s * 0.3, -s * 0.1, s * 0.12, s * 0.4, -0.4, 0, 7); ctx.fill();
+    } else { // 고구마
+      ctx.fillStyle = "#9c4f7c"; ctx.beginPath(); ctx.ellipse(0, 0, s, s * 0.7, 0.35, 0, 7); ctx.fill();
+      ctx.fillStyle = "#7e3a62"; ctx.beginPath(); ctx.arc(-s * 0.35, -s * 0.1, s * 0.08, 0, 7); ctx.arc(s * 0.35, s * 0.12, s * 0.07, 0, 7); ctx.arc(0, -s * 0.02, s * 0.06, 0, 7); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.beginPath(); ctx.ellipse(-s * 0.3, -s * 0.3, s * 0.3, s * 0.14, 0.3, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawBackground() {
+    var horizon = H * 0.15;
+    // 하늘
+    var sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, "#8fd2ef"); sky.addColorStop(1, "#dff2e2");
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, horizon);
+    // 해
+    var sx = W * 0.86, sy = horizon * 0.42;
+    var sg = ctx.createRadialGradient(sx, sy, 5, sx, sy, 55);
+    sg.addColorStop(0, "rgba(255,244,180,0.95)"); sg.addColorStop(1, "rgba(255,244,180,0)");
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, 55, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff0a8"; ctx.beginPath(); ctx.arc(sx, sy, 18, 0, 7); ctx.fill();
+    // 구름
+    for (var i = 0; i < clouds.length; i++) {
+      var cl = clouds[i]; cl.x += cl.v * 0.004; if (cl.x > 1.2) cl.x = -0.2;
+      var ccx = cl.x * W, ccy = cl.y * H, cs = cl.s;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath(); ctx.arc(ccx, ccy, 14 * cs, 0, 7); ctx.arc(ccx + 16 * cs, ccy + 4 * cs, 10 * cs, 0, 7);
+      ctx.arc(ccx - 16 * cs, ccy + 4 * cs, 10 * cs, 0, 7); ctx.arc(ccx, ccy + 8 * cs, 17 * cs, 0, 7); ctx.fill();
+    }
+    // 먼 언덕
+    ctx.fillStyle = "#a9d27a";
+    ctx.beginPath(); ctx.moveTo(0, horizon); ctx.quadraticCurveTo(W * 0.25, horizon - 26, W * 0.5, horizon); ctx.quadraticCurveTo(W * 0.75, horizon - 22, W, horizon); ctx.lineTo(W, horizon); ctx.closePath(); ctx.fill();
+    // 먼 마을 집들
+    for (var hh = 0; hh < 5; hh++) {
+      var hx = W * (0.1 + hh * 0.16), hw = 22, hgt = 14 + (hh % 2) * 8;
+      ctx.fillStyle = "#e8dcc0"; ctx.fillRect(hx, horizon - hgt, hw, hgt);
+      ctx.fillStyle = "#c0504d"; ctx.beginPath(); ctx.moveTo(hx - 3, horizon - hgt); ctx.lineTo(hx + hw / 2, horizon - hgt - 9); ctx.lineTo(hx + hw + 3, horizon - hgt); ctx.closePath(); ctx.fill();
+    }
+    // 들판 (평야)
+    var field = ctx.createLinearGradient(0, horizon, 0, H);
+    field.addColorStop(0, "#a4d469"); field.addColorStop(1, "#6aa838");
+    ctx.fillStyle = field; ctx.fillRect(0, horizon, W, H - horizon);
+    // 밭이랑
+    ctx.strokeStyle = "rgba(70,120,40,0.25)"; ctx.lineWidth = 3;
+    for (var rw = 0; rw < 9; rw++) {
+      var yy = horizon + 14 + rw * ((H - horizon) / 9);
+      ctx.beginPath(); ctx.moveTo(0, yy); ctx.bezierCurveTo(W * 0.33, yy - 6, W * 0.66, yy + 6, W, yy); ctx.stroke();
+    }
+    // 울타리
+    ctx.strokeStyle = "#b07a44"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, horizon + 8); ctx.lineTo(W, horizon + 8); ctx.stroke();
+    for (var fx = 12; fx < W; fx += 46) { ctx.beginPath(); ctx.moveTo(fx, horizon - 2); ctx.lineTo(fx, horizon + 18); ctx.stroke(); }
+
+    // 밭 판 (나무 테두리)
+    var pad = tile * 0.18;
+    var bx = originX - pad, by = originY - pad, bw = COLS * tile + pad * 2, bh = ROWS * tile + pad * 2;
+    ctx.fillStyle = "#8a5a2c";
+    rr(bx - 6, by - 6, bw + 12, bh + 12, 18); ctx.fill();
+    ctx.fillStyle = "#6b4a28";
+    rr(bx, by, bw, bh, 14); ctx.fill();
+    // 칸 체크무늬
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      ctx.fillStyle = ((r + c) % 2 === 0) ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.06)";
+      ctx.fillRect(originX + c * tile, originY + r * tile, tile, tile);
+    }
+  }
+  function rr(x, y, w, h, rad) {
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y); ctx.arcTo(x + w, y, x + w, y + h, rad); ctx.arcTo(x + w, y + h, x, y + h, rad);
+    ctx.arcTo(x, y + h, x, y, rad); ctx.arcTo(x, y, x + w, y, rad); ctx.closePath();
+  }
+
+  function drawTimerBar() {
+    var bw = Math.min(W * 0.6, 340), bh = 12, bx = (W - bw) / 2, byy = H * 0.115;
+    ctx.fillStyle = "rgba(0,0,0,0.15)"; rr(bx - 2, byy - 2, bw + 4, bh + 4, 8); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.4)"; rr(bx, byy, bw, bh, 6); ctx.fill();
+    var ratio = Math.max(0, timeLeft / GAME_TIME);
+    ctx.fillStyle = ratio < 0.25 ? "#e8453c" : "#5d9a3a"; rr(bx, byy, bw * ratio, bh, 6); ctx.fill();
+    ctx.fillStyle = "#3a4f1f"; ctx.font = "bold 15px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("⏱️ " + Math.ceil(Math.max(0, timeLeft)) + "초", W / 2, byy - 6); ctx.textAlign = "left";
+  }
+
+  function loop() {
+    frame++;
+    var R = tile * 0.40;
+
+    if (state === "playing") {
+      timeLeft = GAME_TIME - (now() - startTime) / 1000;
+
+      if (phase === "swapping" && swap) {
+        if (!swap.back) {
+          swap.prog += 0.16;
+          if (swap.prog >= 1) {
+            swap.prog = 1;
+            if (swap.valid) { swap = null; startClear(); }
+            else swap.back = true;
+          }
+        } else {
+          swap.prog -= 0.16;
+          if (swap.prog <= 0) { swapTypes(swap.a, swap.b); swap = null; phase = "idle"; }
+        }
+      } else if (phase === "clearing") {
+        popTimer--;
+        for (var p = poppers.length - 1; p >= 0; p--) { poppers[p].life--; if (poppers[p].life <= 0) poppers.splice(p, 1); }
+        if (popTimer <= 0) { poppers = []; combo++; startFall(); }
+      } else if (phase === "falling") {
+        var settled = true;
+        for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+          if (Math.abs(offY[r][c]) > 0.5) { offY[r][c] += (0 - offY[r][c]) * 0.28; settled = false; }
+          else offY[r][c] = 0;
+        }
+        if (settled) { if (findMatches().length > 0) startClear(); else { combo = 1; phase = "idle"; } }
+      }
+
+      // 힌트: 한동안 못 찾으면 깜빡임
+      if (phase === "idle") { idleTimer++; if (idleTimer > HINT_DELAY && !hint) hint = findHint(); }
+      else { idleTimer = 0; hint = null; }
+
+      for (var fl = floats.length - 1; fl >= 0; fl--) { floats[fl].y -= 0.7; floats[fl].life--; if (floats[fl].life <= 0) floats.splice(fl, 1); }
+
+      if (timeLeft <= 0 && phase === "idle") endGame();
+    }
+
+    // ---- 렌더 ----
+    drawBackground();
+
+    // 타일
+    for (var rr2 = 0; rr2 < ROWS; rr2++) for (var cc = 0; cc < COLS; cc++) {
+      if (!board[rr2]) continue;
+      var t = board[rr2][cc];
+      if (t === -1 || t === undefined) continue;
+      // 스왑 중인 두 칸은 따로 그림
+      if (swap && ((swap.a.r === rr2 && swap.a.c === cc) || (swap.b.r === rr2 && swap.b.c === cc))) continue;
+      drawCrop(t, cx(cc), cy(rr2) + offY[rr2][cc], R);
+    }
+    // 스왑 타일(보간)
+    if (swap) {
+      var pa = { x: cx(swap.a.c), y: cy(swap.a.r) }, pb = { x: cx(swap.b.c), y: cy(swap.b.r) };
+      var ta = board[swap.a.r][swap.a.c], tb = board[swap.b.r][swap.b.c];
+      // a칸 타일은 b위치에서 출발 → a위치
+      drawCrop(ta, pa.x + (pb.x - pa.x) * (1 - swap.prog), pa.y + (pb.y - pa.y) * (1 - swap.prog), R);
+      drawCrop(tb, pb.x + (pa.x - pb.x) * (1 - swap.prog), pb.y + (pa.y - pb.y) * (1 - swap.prog), R);
+    }
+    // 선택 표시
+    if (selected) {
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 4;
+      rr(originX + selected.c * tile + 3, originY + selected.r * tile + 3, tile - 6, tile - 6, 10); ctx.stroke();
+    }
+    // 힌트 깜빡임
+    if (state === "playing" && hint) {
+      var blink = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin(frame * 0.22));
+      ctx.save(); ctx.globalAlpha = blink;
+      ctx.strokeStyle = "#fff21f"; ctx.lineWidth = 5;
+      for (var hi = 0; hi < hint.length; hi++) {
+        rr(originX + hint[hi].c * tile + 3, originY + hint[hi].r * tile + 3, tile - 6, tile - 6, 10); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // 터지는 효과
+    for (var pp = 0; pp < poppers.length; pp++) {
+      var po = poppers[pp], k = po.life / po.max;
+      ctx.globalAlpha = k;
+      drawCrop(po.t, po.x, po.y, R * (0.4 + k * 0.8));
+      ctx.globalAlpha = (1 - k) * 0.8; ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(po.x, po.y, R * (1.2 - k), 0, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // 콤보 텍스트
+    for (var f = 0; f < floats.length; f++) {
+      var ff = floats[f]; ctx.globalAlpha = Math.min(1, ff.life / 25);
+      ctx.font = "bold 30px sans-serif"; ctx.textAlign = "center";
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 5; ctx.strokeText(ff.text, ff.x, ff.y);
+      ctx.fillStyle = ff.color; ctx.fillText(ff.text, ff.x, ff.y); ctx.textAlign = "left";
+    }
+    ctx.globalAlpha = 1;
+
+    if (state === "playing") drawTimerBar();
+
+    requestAnimationFrame(loop);
+  }
+  genBoard();   // 시작 화면 뒤에 보드를 미리 채워둠(루프 안전)
+  loop();
+})();
+</script>
+</body>
+</html>
